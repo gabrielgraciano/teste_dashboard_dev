@@ -22,7 +22,7 @@ def load_map_data():
 geojson_brasil = load_map_data()
 
 # Configuração da página
-st.set_page_config(page_title="Dashboard Municipal 360º", layout="wide", page_icon="fea_dev_logo.jpg")
+st.set_page_config(page_title="Dash Grupo 02", layout="wide", page_icon="fea_dev_logo.jpg")
 
 # --- CUSTOM CSS (Fundo + Sidebar Preta) ---
 def set_custom_style(bg_image_file):
@@ -80,7 +80,7 @@ set_custom_style('fundo3.png')
 # --- 1. CARREGAMENTO DOS DADOS ---
 @st.cache_data
 def load_data():
-    df = pd.read_csv("DATASET_MESTRE_FINAL.csv")
+    df = pd.read_csv("DATASET_CLUSTERIZADO.csv")
     
     # Tratamento de UF
     if 'cod' in df.columns:
@@ -102,11 +102,11 @@ except FileNotFoundError:
     st.stop()
 
 # --- 2. SIDEBAR (FILTROS) ---
-st.sidebar.header("🔍 Filtros")
+st.sidebar.header("Filtros")
 
 # Como o fundo é preto, vamos garantir que o slider e multiselect funcionem
 estados = sorted(df['UF'].dropna().unique())
-ufs_selecionadas = st.sidebar.multiselect("Selecione Estados", estados, default=['SP', 'RJ', 'MG'])
+ufs_selecionadas = st.sidebar.multiselect("Selecione Estados", estados, default=['SP'])
 
 pop_min, pop_max = int(df['populacao'].min()), int(df['populacao'].max())
 pop_range = st.sidebar.slider("Faixa de População", pop_min, pop_max, (pop_min, pop_max))
@@ -134,7 +134,7 @@ with col_title:
 
 st.markdown("---")
 
-st.title(f"🇧🇷 Panorama Municipal ({len(df_filtered)} filtrados)")
+st.title(f"Panorama Municipal ({len(df_filtered)} filtrados)")
 
 # --- 4. KPIs ---
 col1, col2, col3, col4 = st.columns(4)
@@ -146,47 +146,92 @@ col4.metric("PIB per Capita Médio", f"R$ {df_filtered['pib_per_capita'].mean():
 st.markdown("---")
 
 # --- 5. VISUALIZAÇÕES ---
-tab1, tab2, tab3 = st.tabs(["💰 Economia vs Saúde", "🏥 Eficiência Hospitalar", "📋 Dados Brutos"])
+tab1, tab2, tab3, tab4 = st.tabs(["Economia e Saúde", "Eficiência Hospitalar", "Dados Brutos", "Comparar Municípios"])
 
-with tab1: # Ou onde você preferir
+with tab1:
     st.subheader("Mapa Interativo de Calor")
     
-    # Dropdown para escolher o que pintar no mapa
-    metric_map = st.selectbox(
-        "Escolha o indicador para o mapa:",
-        ['taxa_mortalidade_infantil', 'pib_per_capita', 'pct_prenatal', 'pct_icsap']
-    )
+    # 1. DICIONÁRIO DE NOMES (LEGENDAS)
+    labels = {
+        'Cluster': 'Cluster (Grupos Semelhantes)', 
+        'taxa_mortalidade_infantil': 'Taxa de Mortalidade Infantil',
+        'pib_per_capita': 'PIB per Capita (R$)',
+        'pct_prenatal': 'Cobertura de Pré-Natal (%)',
+        'pct_icsap': 'Internações Sensíveis (ICSAP %)'
+    }
     
-    # GARANTIA DE INTEGRIDADE:
-    # O Plotly só vai pintar se o tipo de dado for igual (String com String)
+    # 2. SELECTBOX
+    metric_map = st.selectbox(
+       "Escolha o indicador para o mapa:",
+       options=list(labels.keys()), 
+       format_func=lambda x: labels[x]
+    )
+
+    # GARANTIA DE INTEGRIDADE (Convertendo código IBGE para texto para o mapa ler)
     df_filtered['cod'] = df_filtered['cod'].astype(str)
 
+    # --- LÓGICA DO CLUSTER (O PULO DO GATO) ---
+    if metric_map == 'Cluster':
+        # Definição dos Nomes
+        nomes_clusters = {
+            2: 'Riqueza Desequilibrada',
+            0: 'Eficiente (Saúde/Segurança Alta)',
+            3: 'Vulnerável (Mortalidade Alta)',
+            1: 'Crise de Gestão (ICSAP Alto)'
+        }
+        
+        # Cria uma coluna temporária com os nomes para o gráfico
+        # O .map troca o número pelo texto correspondente
+        df_filtered['Cluster_Nome'] = df_filtered['Cluster'].map(nomes_clusters)
+        
+        coluna_cor = 'Cluster_Nome' # O mapa vai usar essa nova coluna de nomes
+        escala = None               # Plotly escolhe cores automáticas para categorias
+        
+        # (Opcional) Se quiser forçar cores específicas para cada grupo:
+        color_map_custom = {
+            'Riqueza Desequilibrada': '#f1c40f',          # Amarelo
+            'Eficiente (Saúde/Segurança Alta)': '#2ecc71', # Verde
+            'Vulnerável (Mortalidade Alta)': '#e74c3c',    # Vermelho
+            'Crise de Gestão (ICSAP Alto)': '#e67e22'      # Laranja
+        }
+    else:
+        coluna_cor = metric_map
+        escala = "Reds"
+        color_map_custom = None
+
+    # 3. CRIAÇÃO DO MAPA
     fig_map = px.choropleth(
         df_filtered,
-        geojson=geojson_brasil,      # O arquivo geográfico simplificado
-        locations='cod',             # Coluna do seu CSV/DataFrame
-        featureidkey="properties.id", # Onde está o ID no GeoJSON (AJUSTE SE PRECISAR)
-        color=metric_map,            # A cor depende dessa coluna
-        hover_name='mun',            # O que aparece ao passar o mouse
+        geojson=geojson_brasil,      
+        locations='cod',             
+        featureidkey="properties.id", 
+        color=coluna_cor,            # <--- Agora usa a coluna tratada (Nome ou Valor)
+        hover_name='mun',            
         hover_data=['populacao', 'UF'],
-        color_continuous_scale="Reds", # Escala de cor (ex: 'Viridis', 'Blues')
-        title=f"Mapa de {metric_map} por Município"
+        
+        # Lógica para alternar entre Escala Contínua (Vermelhos) e Discreta (Grupos)
+        color_continuous_scale=escala if metric_map != 'Cluster' else None,
+        color_discrete_map=color_map_custom if metric_map == 'Cluster' else None,
+        
+        title=f"Mapa de {labels[metric_map]} por Município"
     )
 
-    # Ajuste fino do layout do mapa para focar no Brasil
-    fig_map.update_geos(fitbounds="locations", visible=False)
-    fig_map.update_layout(margin={"r":0,"t":30,"l":0,"b":0})
-
+    # Ajustes visuais (Transparência e Foco)
+    fig_map.update_geos(fitbounds="locations", visible=False, bgcolor='rgba(0,0,0,0)')
     fig_map.update_layout(
-    paper_bgcolor='rgba(0,0,0,0)', # Fundo externo transparente
-    plot_bgcolor='rgba(0,0,0,0)',  # Fundo interno transparente
-    margin={"r":0,"t":0,"l":0,"b":0}, # Remove as margens brancas sobrando
-    font_color="white" # Garante que legendas/títulos fiquem legíveis no fundo preto
-    )
-
-    fig_map.update_geos(
-    bgcolor='rgba(0,0,0,0)', 
-    visible=False # Esconde a moldura do mapa-múndi se estiver aparecendo
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)',  
+        margin={"r":0,"t":40,"l":0,"b":0},
+        font_color="white",
+        
+        # Ajuste da legenda para não cobrir o mapa
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(0,0,0,0.5)" # Fundo semi-transparente na legenda para ler melhor
+        )
     )
     
     st.plotly_chart(fig_map, use_container_width=True)
@@ -225,3 +270,91 @@ with tab3:
         use_container_width=True,
         hide_index=True
     )
+
+with tab4:
+    st.subheader("Comparativo Direto entre Municípios")
+    
+    # 1. PREPARAÇÃO DOS DADOS
+    df_comp = df.copy()
+    
+    # Cria identificador único (Nome - UF) para o filtro
+    df_comp['nome_exibicao'] = df_comp['mun']
+    
+    # --- MAPEAMENTO DOS CLUSTERS (IGUAL À TAB 1) ---
+    nomes_clusters = {
+        2: '2 - Riqueza Desequilibrada',
+        0: '0 - Eficiente (Saúde/Segurança Alta)',
+        3: '3 - Vulnerável (Mortalidade Alta)',
+        1: '1 - Crise de Gestão (ICSAP Alto)'
+    }
+    # Aqui criamos a coluna de texto. Se o cluster for NaN, fica "Sem Classificação"
+    df_comp['Cluster_Texto'] = df_comp['Cluster'].map(nomes_clusters).fillna('Sem Classificação')
+
+    # 2. FILTRO DE COMPARAÇÃO
+    cidades_selecionadas = st.multiselect(
+        "Selecione até 3 municípios para comparar:",
+        options=sorted(df_comp['nome_exibicao'].unique()),
+        max_selections=3,
+        placeholder="Digite o nome da cidade (ex: Campinas - SP)..."
+    )
+    
+    # 3. EXIBIÇÃO
+    if cidades_selecionadas:
+        # Filtra apenas as cidades escolhidas
+        df_selected = df_comp[df_comp['nome_exibicao'].isin(cidades_selecionadas)]
+        
+        # --- A. TABELA LADO A LADO ---
+        st.write("###  Quadro Resumo")
+        
+        # Definição das colunas que vão aparecer na tabela
+        cols_to_show = {
+            'nome_exibicao': 'Município',
+            'Cluster_Texto': 'Cluster (Classificação)', # <--- AGORA MOSTRA O TEXTO
+            'populacao': 'População',
+            'pib_per_capita': 'PIB per Capita (R$)',
+            'taxa_mortalidade_infantil': 'Mortalidade Infantil',
+            'pct_prenatal': 'Cobertura Pré-Natal (%)',
+            'pct_icsap': 'Internações Evitáveis (%)',
+            'custo_medio': 'Custo Médio Internação (R$)'
+        }
+        
+        # Cria a tabela transposta (.T) para ficar fácil de comparar lado a lado
+        # O set_index garante que o nome da cidade fique no cabeçalho das colunas
+        tabela_comp = df_selected[cols_to_show.keys()].rename(columns=cols_to_show).set_index('Município').T
+        
+        st.dataframe(tabela_comp, use_container_width=True)
+        
+        # --- B. GRÁFICO COMPARATIVO ---
+        st.write("###  Visualização Gráfica")
+        
+        metrica_comp = st.selectbox(
+            "Escolha o indicador para visualizar:",
+            ['taxa_mortalidade_infantil', 'pct_prenatal', 'pct_icsap', 'pib_per_capita'],
+            format_func=lambda x: {'taxa_mortalidade_infantil': 'Mortalidade Infantil', 
+                                 'pct_prenatal': 'Cobertura Pré-Natal',
+                                 'pct_icsap': 'Internações Evitáveis',
+                                 'pib_per_capita': 'PIB per Capita'}[x]
+        )
+        
+        fig_comp = px.bar(
+            df_selected,
+            x='nome_exibicao', # Cidade no eixo X
+            y=metrica_comp,    # Métrica no eixo Y
+            color='nome_exibicao', # Cada cidade com uma cor
+            text_auto='.2f',   # Mostra o valor em cima da barra
+            title=f"Comparativo: {metrica_comp}",
+            labels={'nome_exibicao': 'Município', metrica_comp: 'Valor'}
+        )
+        
+        # Ajuste visual para combinar com o fundo preto
+        fig_comp.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)',
+            font_color="white",
+            showlegend=False # Esconde legenda pois o nome já está no eixo X
+        )
+        
+        st.plotly_chart(fig_comp, use_container_width=True)
+        
+    else:
+        st.info("Selecione os municípios no campo acima para ver a comparação.")
